@@ -1,10 +1,12 @@
 <?php
 
+namespace HeaderFooter;
+
 /*
   Plugin Name: Head, Footer and Post Injections
   Plugin URI: https://www.satollo.net/plugins/header-footer
   Description: Header and Footer lets to add html/javascript code to the head and footer and posts of your blog. Some examples are provided on the <a href="http://www.satollo.net/plugins/header-footer">official page</a>.
-  Version: 3.2.5
+  Version: 3.3.0
   Requires PHP: 5.6
   Requires at least: 4.6
   Author: Stefano Lissa
@@ -32,23 +34,60 @@
 
 defined('ABSPATH') || exit;
 
-$hefo_options = get_option('hefo', []);
+class Plugin {
 
-$hefo_is_mobile = false;
-if (isset($_SERVER['HTTP_USER_AGENT']) && isset($hefo_options['mobile_user_agents_parsed'])) {
-    $hefo_is_mobile = preg_match('/' . $hefo_options['mobile_user_agents_parsed'] . '/', strtolower($_SERVER['HTTP_USER_AGENT']));
-}
+    const MAX_GENERICS = 5;
 
-if (is_admin()) {
-    require_once dirname(__FILE__) . '/admin/admin.php';
-}
+    static $instance;
+    var $options;
+    var $is_mobile = false;
+    var $is_amp_endpoint = false;
+    var $is_php_enabled = false;
+    var $body_block = '';
+    var $generic_block = [];
 
-if (isset($hefo_options['disable_css_id'])) {
+    public function __construct() {
+        self::$instance = $this;
 
-    function hefo_style_loader_tag($link) {
-        global $hefo_options;
-        $link = preg_replace("/id='.*?-css'/", "", $link);
-        if (isset($hefo_options['disable_css_media'])) {
+        $this->options = get_option('hefo', []);
+
+        if (!is_admin()) {
+            add_action('wp', [$this, 'hook_wp']);
+        }
+    }
+
+    function hook_wp() {
+        if (isset($_SERVER['HTTP_USER_AGENT']) && !empty($this->options['mobile_user_agents_parsed'])) {
+            $this->is_mobile = preg_match('/' . $this->options['mobile_user_agents_parsed'] . '/', strtolower($_SERVER['HTTP_USER_AGENT']));
+        }
+
+        $this->is_php_enabled = apply_filters('hefo_php_exec', !empty($this->options['enable_php']));
+
+        $this->is_amp_endpoint = function_exists('is_amp_endpoint') && is_amp_endpoint();
+
+        if ($this->is_amp_endpoint) {
+            $this->init_amp();
+            add_action('the_content', [$this, 'hook_the_content_amp']);
+        } else {
+            add_action('wp_head', [$this, 'hook_wp_head_pre'], 1);
+            add_action('wp_head', [$this, 'hook_wp_head_post'], 11);
+
+            if (!empty($this->options['disable_css_id']) || !empty($this->options['disable_css_media'])) {
+                add_filter('style_loader_tag', [$this, 'hook_style_loader_tag']);
+            }
+            add_action('wp_footer', [$this, 'hook_wp_footer']);
+            add_action('template_redirect', [$this, 'hook_template_redirect'], 1);
+            add_action('the_excerpt', [$this, 'hook_the_excerpt']);
+            add_action('the_content', [$this, 'hook_the_content']);
+        }
+    }
+
+    function hook_style_loader_tag($link) {
+        if (!empty($this->options['disable_css_id'])) {
+            $link = preg_replace("/id='.*?-css'/", "", $link);
+        }
+
+        if (!empty($this->options['disable_css_media'])) {
             if (!preg_match("/media='print'/", $link)) {
                 $link = preg_replace("/media='.*?'/", "", $link);
             }
@@ -56,25 +95,274 @@ if (isset($hefo_options['disable_css_id'])) {
         return $link;
     }
 
-    add_filter('style_loader_tag', 'hefo_style_loader_tag');
+    function hook_wp_head_pre() {
+
+        if (!empty($this->options['disable_wlwmanifest_link'])) {
+            remove_action('wp_head', 'wlwmanifest_link');
+        }
+
+        if (!empty($this->options['disable_rsd_link'])) {
+            remove_action('wp_head', 'rsd_link');
+        }
+
+        if (!empty($this->options['disable_feed_links_extra'])) {
+            remove_action('wp_head', 'feed_links_extra', 3);
+        }
+
+        if (!empty($this->options['disable_wp_shortlink_wp_head'])) {
+            remove_action('wp_head', 'wp_shortlink_wp_head', 10, 0);
+        }
+
+        if (!empty($this->options['disable_wp_shortlink_wp_head'])) {
+            remove_action('wp_head', 'wp_shortlink_wp_head', 10, 0);
+        }
+    }
+
+    function hook_wp_head_post() {
+        if (is_front_page()) {
+            $this->execute_option('head_home', true);
+        }
+
+        $this->execute_option('head', true);
+    }
+
+    function hook_wp_footer() {
+        if ($this->is_mobile && !empty($this->options['mobile_footer_enabled'])) {
+            hefo_execute_option('mobile_footer', true);
+        } else {
+            hefo_execute_option('footer', true);
+        }
+    }
+
+    function hook_the_content($content) {
+        global $hefo_options, $wpdb, $post;
+
+        $before = '';
+        $after = '';
+
+        if (!is_singular()) {
+            return $content;
+        }
+
+        $type = '';
+
+        if (is_page() && empty($this->options['page_use_post'])) {
+            $type = 'page_';
+        }
+
+        //if (!get_post_meta($post->ID, 'hefo_before', true)) {
+        if ($this->is_mobile && !empty($this->options['mobile_' . $type . 'before_enabled'])) {
+            $before = $this->execute_option('mobile_' . $type . 'before');
+        } else {
+            $before = $this->execute_option($type . 'before');
+        }
+        //}
+        //if (!get_post_meta($post->ID, 'hefo_after', true)) {
+        if ($this->is_mobile && isset($this->options['mobile_' . $type . 'after_enabled'])) {
+            $after = $this->execute_option('mobile_' . $type . 'after');
+        } else {
+            $after = $this->execute_option($type . 'after');
+        }
+        //}
+        // Rules
+
+        for ($i = 1; $i <= 5; $i++) {
+            if (empty($this->options['inner_tag_' . $i])) {
+                continue;
+            }
+            $prefix = '';
+            if ($this->is_mobile && !empty($this->options['mobile_inner_enabled_' . $i])) {
+                $prefix = 'mobile_';
+            }
+            $skip = trim($this->options['inner_skip_' . $i]);
+            if (empty($skip)) {
+                $skip = 0;
+            } else if (substr($skip, -1) == '%') {
+                $skip = (intval($skip) * strlen($content) / 100);
+            }
+
+            if ($this->options['inner_pos_' . $i] == 'after') {
+                $res = $this->insert_after($content, $this->execute_option($prefix . 'inner_' . $i), $this->options['inner_tag_' . $i], $skip);
+            } else {
+                $res = $this->insert_before($content, $this->execute_option($prefix . 'inner_' . $i), $this->options['inner_tag_' . $i], $skip);
+            }
+            if (!$res) {
+                switch ($this->options['inner_alt_' . $i]) {
+                    case 'after':
+                        $content = $content . $this->execute_option($prefix . 'inner_' . $i);
+                        break;
+                    case 'before':
+                        $content = $this->execute_option($prefix . 'inner_' . $i) . $content;
+                }
+            }
+        }
+
+        return $before . $content . $after;
+    }
+
+    function init_amp() {
+        add_action('amp_post_template_head', function () {
+            echo $this->execute_option('amp_head', true);
+        }, 100);
+
+        add_action('amp_post_template_css', function () {
+            $this->execute_option('amp_css', true);
+        }, 100);
+
+        add_action('amp_post_template_body_open', function () {
+            $this->execute_option('amp_body', true);
+        }, 100);
+
+        add_action('amp_post_template_footer', function () {
+            $this->execute_option('amp_footer', true);
+        }, 100);
+    }
+
+    function hook_the_content_amp($content) {
+        $before = '';
+        $after = '';
+
+        $before = $this->execute_option('amp_post_before');
+        $after = $this->execute_option('amp_post_after');
+        return $before . $content . $after;
+    }
+
+    function execute($buffer) {
+        global $wpdb, $post;
+
+        if ($this->is_php_enabled) {
+            ob_start();
+            eval('?>' . $buffer);
+            $buffer = ob_get_clean();
+        }
+        return trim($buffer);
+    }
+
+    function execute_option($key, $echo = false) {
+        global $wpdb, $post;
+        if (empty($this->options[$key])) {
+            return '';
+        }
+
+        $buffer = $this->replace($this->options[$key]);
+        if ($echo) {
+            echo $this->execute($buffer);
+        } else {
+            return $this->execute($buffer);
+        }
+    }
+
+    function hook_template_redirect() {
+
+        if ($this->is_mobile && !empty($this->options['mobile_body_enabled'])) {
+            $this->body_block = $this->execute_option('mobile_body');
+        } else {
+            $this->body_block = $this->execute_option('body');
+        }
+
+        $empty = empty($this->body_block);
+
+        for ($i = 1; $i <= self::MAX_GENERICS; $i++) {
+            if ($this->is_mobile && !empty($this->options['mobile_generic_enabled_' . $i])) {
+                $this->generic_block[$i] = $this->execute_option('mobile_generic_' . $i);
+            } else {
+                $this->generic_block[$i] = $this->execute_option('generic_' . $i);
+            }
+            $empty = $empty && empty($this->generic_block[$i]);
+        }
+
+        if (!$empty) {
+            ob_start([$this, 'template_redirect_callback']);
+        }
+    }
+
+    function template_redirect_callback($buffer) {
+
+        for ($i = 1; $i <= self::MAX_GENERICS; $i++) {
+            if (!empty($this->options['generic_tag_' . $i])) {
+                $this->insert_before($buffer, $this->generic_block[$i], $this->options['generic_tag_' . $i]);
+            }
+        }
+        $x = strpos($buffer, '<body');
+        if ($x === false) {
+            return $buffer;
+        }
+        $x = strpos($buffer, '>', $x);
+        if ($x === false) {
+            return $buffer;
+        }
+        $x++;
+        return substr($buffer, 0, $x) . "\n" . $this->body_block . substr($buffer, $x);
+    }
+
+    function insert_before(&$content, $what, $marker, $starting_from = 0) {
+        if (strlen($content) < $starting_from) {
+            return false;
+        }
+
+        if (empty($marker)) {
+            $marker = ' ';
+        }
+        $x = strpos($content, $marker, $starting_from);
+        if ($x !== false) {
+            $content = substr_replace($content, $what, $x, 0);
+            return true;
+        }
+        return false;
+    }
+
+    function insert_after(&$content, $what, $marker, $starting_from = 0) {
+
+        if (strlen($content) < $starting_from) {
+            return false;
+        }
+
+        if (empty($marker)) {
+            $marker = ' ';
+        }
+
+        $x = strpos($content, $marker, $starting_from);
+
+        if ($x !== false) {
+            $content = substr_replace($content, $what, $x + strlen($marker), 0);
+            return true;
+        }
+        return false;
+    }
+
+    function hook_the_excerpt($content) {
+        global $post, $wpdb, $hefo_count;
+        $hefo_count++;
+        if (is_category() || is_tag() || is_home()) {
+            $before = $this->execute_option('excerpt_before');
+            $after = $this->execute_option('excerpt_after');
+
+            return $before . $content . $after;
+        } else {
+            return $content;
+        }
+    }
+
+    function replace($buffer) {
+        for ($i = 1; $i <= 5; $i++) {
+            if (empty($this->options['snippet_' . $i]))
+                continue;
+            $buffer = str_replace('[snippet_' . $i . ']', $this->options['snippet_' . $i], $buffer);
+        }
+
+        return $buffer;
+    }
+
+}
+
+new Plugin();
+
+if (is_admin()) {
+    require_once dirname(__FILE__) . '/admin/admin.php';
 }
 
 register_activation_hook(__FILE__, function () {
-    $options = get_option('hefo');
-    if (!is_array($options)) {
-        $options = [];
-    }
-    // Compatibility with "already" installed
-    if (!empty($options)) {
-        $options['enable_php'] = 1;
-    }
-    $options = array_merge(['enable_php'=>0, 'after' => '', 'before' => '', 'head' => '', 'body' => '', 'head_home' => '', 'footer' => ''], $options);
-    for ($i = 1; $i <= 5; $i++) {
-        $options['snippet_' . $i] = '';
-        $options['generic_' . $i] = '';
-    }
-    $options['updated'] = time(); // Force an update if the old options match (otherwise the autoload is not saved)
-    update_option('hefo', $options, true);
+   
 });
 
 register_deactivation_hook(__FILE__, function () {
@@ -85,276 +373,3 @@ register_deactivation_hook(__FILE__, function () {
     }
 });
 
-add_action('template_redirect', 'hefo_template_redirect', 1);
-
-$hefo_body_block = '';
-$hefo_generic_block = array();
-
-function hefo_template_redirect() {
-    global $hefo_body_block, $hefo_generic_block, $hefo_options, $hefo_is_mobile;
-
-    if (function_exists('is_amp_endpoint') && is_amp_endpoint())
-        return;
-
-    if ($hefo_is_mobile && isset($hefo_options['mobile_body_enabled'])) {
-        $hefo_body_block = hefo_execute_option('mobile_body');
-    } else {
-        $hefo_body_block = hefo_execute_option('body');
-    }
-
-    for ($i = 1; $i <= 5; $i++) {
-        if ($hefo_is_mobile && isset($hefo_options['mobile_generic_enabled_' . $i])) {
-            $hefo_generic_block[$i] = hefo_execute_option('mobile_generic_' . $i);
-        } else {
-            $hefo_generic_block[$i] = hefo_execute_option('generic_' . $i);
-        }
-    }
-
-    ob_start('hefo_callback');
-}
-
-function hefo_callback($buffer) {
-    global $hefo_body_block, $hefo_generic_block, $hefo_options, $hefo_is_mobile;
-
-    for ($i = 1; $i <= 5; $i++) {
-        if (isset($hefo_options['generic_tag_' . $i]))
-            hefo_insert_before($buffer, $hefo_generic_block[$i], $hefo_options['generic_tag_' . $i]);
-    }
-    $x = strpos($buffer, '<body');
-    if ($x === false) {
-        return $buffer;
-    }
-    $x = strpos($buffer, '>', $x);
-    if ($x === false) {
-        return $buffer;
-    }
-    $x++;
-    return substr($buffer, 0, $x) . "\n" . $hefo_body_block . substr($buffer, $x);
-}
-
-add_action('wp_head', 'hefo_wp_head_pre', 1);
-
-function hefo_wp_head_pre() {
-    global $hefo_options, $wp_query;
-
-    if (isset($hefo_options['disable_wlwmanifest_link'])) {
-        remove_action('wp_head', 'wlwmanifest_link');
-    }
-
-    if (isset($hefo_options['disable_rsd_link'])) {
-        remove_action('wp_head', 'rsd_link');
-    }
-
-    if (isset($hefo_options['disable_feed_links_extra'])) {
-        remove_action('wp_head', 'feed_links_extra', 3);
-    }
-
-    if (isset($hefo_options['disable_wp_shortlink_wp_head'])) {
-        remove_action('wp_head', 'wp_shortlink_wp_head', 10, 0);
-    }
-
-    if (isset($hefo_options['disable_wp_shortlink_wp_head'])) {
-        remove_action('wp_head', 'wp_shortlink_wp_head', 10, 0);
-    }
-}
-
-add_action('wp_head', 'hefo_wp_head_post', 11);
-
-function hefo_wp_head_post() {
-    if (is_front_page()) {
-        hefo_execute_option('head_home', true);
-    }
-
-    hefo_execute_option('head', true);
-}
-
-add_action('amp_post_template_head', function () {
-    echo hefo_execute_option('amp_head', true);
-}, 100);
-
-
-add_action('amp_post_template_css', function () {
-    hefo_execute_option('amp_css', true);
-}, 100);
-
-add_action('amp_post_template_body_open', function () {
-    hefo_execute_option('amp_body', true);
-}, 100);
-
-add_action('amp_post_template_footer', function () {
-    hefo_execute_option('amp_footer', true);
-}, 100);
-
-add_action('wp_footer', 'hefo_wp_footer');
-
-function hefo_wp_footer() {
-    global $hefo_is_mobile;
-
-    if ($hefo_is_mobile && isset($hefo_options['mobile_footer_enabled'])) {
-        hefo_execute_option('mobile_footer', true);
-    } else {
-        hefo_execute_option('footer', true);
-    }
-}
-
-add_action('the_content', 'hefo_the_content');
-
-function hefo_the_content($content) {
-    global $hefo_options, $wpdb, $post, $hefo_is_mobile;
-
-    $before = '';
-    $after = '';
-
-    // AMP detection
-    if (function_exists('is_amp_endpoint') && is_amp_endpoint()) {
-        $before = hefo_execute_option('amp_post_before');
-        $after = hefo_execute_option('amp_post_after');
-        return $before . $content . $after;
-    }
-
-    if (!is_singular()) {
-        return $content;
-    }
-    $type = '';
-
-    if (is_page() && !isset($hefo_options['page_use_post'])) {
-        $type = 'page_';
-    }
-
-    if (!get_post_meta($post->ID, 'hefo_before', true)) {
-        if ($hefo_is_mobile && isset($hefo_options['mobile_' . $type . 'before_enabled'])) {
-            $before = hefo_execute_option('mobile_' . $type . 'before');
-        } else {
-            $before = hefo_execute_option($type . 'before');
-        }
-    }
-
-    if (!get_post_meta($post->ID, 'hefo_after', true)) {
-        if ($hefo_is_mobile && isset($hefo_options['mobile_' . $type . 'after_enabled'])) {
-            $after = hefo_execute_option('mobile_' . $type . 'after');
-        } else {
-            $after = hefo_execute_option($type . 'after');
-        }
-    }
-
-    // Rules
-
-    for ($i = 1; $i <= 5; $i++) {
-        if (empty($hefo_options['inner_tag_' . $i])) {
-            continue;
-        }
-        $prefix = '';
-        if ($hefo_is_mobile && isset($hefo_options['mobile_inner_enabled_' . $i])) {
-            $prefix = 'mobile_';
-        }
-        $skip = trim($hefo_options['inner_skip_' . $i]);
-        if (empty($skip)) {
-            $skip = 0;
-        } else if (substr($skip, -1) == '%') {
-            $skip = (intval($skip) * strlen($content) / 100);
-        }
-
-        if ($hefo_options['inner_pos_' . $i] == 'after') {
-            $res = hefo_insert_after($content, hefo_execute_option($prefix . 'inner_' . $i), $hefo_options['inner_tag_' . $i], $skip);
-        } else {
-            $res = hefo_insert_before($content, hefo_execute_option($prefix . 'inner_' . $i), $hefo_options['inner_tag_' . $i], $skip);
-        }
-        if (!$res) {
-            switch ($hefo_options['inner_alt_' . $i]) {
-                case 'after':
-                    $content = $content . hefo_execute_option($prefix . 'inner_' . $i);
-                    break;
-                case 'before':
-                    $content = hefo_execute_option($prefix . 'inner_' . $i) . $content;
-            }
-        }
-    }
-
-    return $before . $content . $after;
-}
-
-function hefo_insert_before(&$content, $what, $marker, $starting_from = 0) {
-    if (strlen($content) < $starting_from) {
-        return false;
-    }
-
-    if (empty($marker)) {
-        $marker = ' ';
-    }
-    $x = strpos($content, $marker, $starting_from);
-    if ($x !== false) {
-        $content = substr_replace($content, $what, $x, 0);
-        return true;
-    }
-    return false;
-}
-
-function hefo_insert_after(&$content, $what, $marker, $starting_from = 0) {
-
-    if (strlen($content) < $starting_from) {
-        return false;
-    }
-
-    if (empty($marker)) {
-        $marker = ' ';
-    }
-
-    $x = strpos($content, $marker, $starting_from);
-
-    if ($x !== false) {
-        $content = substr_replace($content, $what, $x + strlen($marker), 0);
-        return true;
-    }
-    return false;
-}
-
-add_action('the_excerpt', 'hefo_the_excerpt');
-global $hefo_count;
-$hefo_count = 0;
-
-function hefo_the_excerpt($content) {
-    global $hefo_options, $post, $wpdb, $hefo_count;
-    $hefo_count++;
-    if (is_category() || is_tag()) {
-        $before = hefo_execute_option('excerpt_before');
-        $after = hefo_execute_option('excerpt_after');
-
-        return $before . $content . $after;
-    } else {
-        return $content;
-    }
-}
-
-function hefo_replace($buffer) {
-    global $hefo_options, $post;
-
-    for ($i = 1; $i <= 5; $i++) {
-        if (empty($hefo_options['snippet_' . $i]))
-            continue;
-        $buffer = str_replace('[snippet_' . $i . ']', $hefo_options['snippet_' . $i], $buffer);
-    }
-
-    return $buffer;
-}
-
-function hefo_execute($buffer) {
-    global $hefo_options, $post;
-
-    if (apply_filters('hefo_php_exec', !empty($hefo_options['enable_php']))) {
-        ob_start();
-        eval('?>' . $buffer);
-        $buffer = ob_get_clean();
-    }
-    return $buffer;
-}
-
-function hefo_execute_option($key, $echo = false) {
-    global $hefo_options, $wpdb, $post;
-    if (empty($hefo_options[$key]))
-        return '';
-    $buffer = hefo_replace($hefo_options[$key]);
-    if ($echo)
-        echo hefo_execute($buffer);
-    else
-        return hefo_execute($buffer);
-}

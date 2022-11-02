@@ -1,5 +1,53 @@
 <?php
+
+namespace HeaderFooter;
+
 defined('ABSPATH') || exit;
+
+class Controls {
+
+    var $options;
+
+    public function __construct($options) {
+        $this->options = $options;
+    }
+
+    function get_value($name, $default = '') {
+        if (!isset($this->options[$name])) {
+            return $default;
+        }
+        return $this->options[$name];
+    }
+
+    function checkbox($name, $label = '') {
+        static $count = 0;
+        $count++;
+        $value = $this->get_value($name, '0');
+        $id = 'checkbox_' . $count;
+        echo '<input type="hidden" id="', $id, '" name="options[', esc_attr($name), ']" value="', esc_attr($value), '">';
+        echo '<label>';
+        echo '<input type="checkbox" ', (empty($value) ? '' : 'checked'), ' onchange="document.getElementById(\'', $id, '\').value=this.checked?1:0"> ';
+        echo esc_html($label);
+        echo '</label>';
+    }
+
+    function text($name) {
+        echo '<input type="text" name="options[', esc_attr($name), ']" value="', esc_attr($this->get_value($name)), '">';
+    }
+
+    function editor($name) {
+        echo '<textarea class="hefo-controls-editor" name="options[' . esc_attr($name) . ']">';
+        echo esc_html($this->get_value($name));
+        echo '</textarea>';
+    }
+    
+    function textarea($name) {
+        echo '<textarea style="width: 100%; height: 150px" name="options[' . esc_attr($name) . ']">';
+        echo esc_html($this->get_value($name));
+        echo '</textarea>';
+    }
+
+}
 
 function hefo_request($name, $default = null) {
     if (!isset($_REQUEST[$name])) {
@@ -90,7 +138,7 @@ function hefo_base_textarea_cm($name, $type = '', $tips = '') {
     if (!empty($type)) {
         $type = '-' . $type;
     }
-    
+
     if (!isset($options[$name])) {
         $options[$name] = '';
     }
@@ -107,17 +155,20 @@ function hefo_base_textarea_cm($name, $type = '', $tips = '') {
 
 function hefo_rule($number) {
     global $options;
-    
+
     if (!isset($options['inner_pos_' . $number])) {
         $options['inner_pos_' . $number] = 'after';
     }
-    
+
     if (!isset($options['inner_skip_' . $number])) {
         $options['inner_skip_' . $number] = 0;
     }
-    
+
     if (!isset($options['inner_tag_' . $number])) {
         $options['inner_tag_' . $number] = '';
+    }
+    if (!isset($options['inner_alt_' . $number])) {
+        $options['inner_alt_' . $number] = '';
     }
 
     echo '<div class="rules">';
@@ -151,5 +202,3 @@ function hefo_rule($number) {
     echo '</select>';
     echo '<div class="clearfix"></div></div>';
 }
-
-
