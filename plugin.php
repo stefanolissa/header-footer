@@ -54,8 +54,21 @@ class Plugin {
         if (!is_admin()) {
             add_action('wp', [$this, 'hook_wp']);
         }
+
+        add_action('init', function () {
+            if (!empty($this->options['page_add_tags'])) {
+                register_taxonomy_for_object_type('post_tag', 'page');
+            }
+
+            if (!empty($this->options['page_add_categories'])) {
+                register_taxonomy_for_object_type('category', 'page');
+            }
+        });
     }
 
+    /**
+     * AMP is ready only after this hook.
+     */
     function hook_wp() {
         if (isset($_SERVER['HTTP_USER_AGENT']) && !empty($this->options['mobile_user_agents_parsed'])) {
             $this->is_mobile = preg_match('/' . $this->options['mobile_user_agents_parsed'] . '/', strtolower($_SERVER['HTTP_USER_AGENT']));
@@ -128,14 +141,14 @@ class Plugin {
 
     function hook_wp_footer() {
         if ($this->is_mobile && !empty($this->options['mobile_footer_enabled'])) {
-            hefo_execute_option('mobile_footer', true);
+            $this->execute_option('mobile_footer', true);
         } else {
-            hefo_execute_option('footer', true);
+            $this->execute_option('footer', true);
         }
     }
 
     function hook_the_content($content) {
-        global $hefo_options, $wpdb, $post;
+        global $wpdb, $post;
 
         $before = '';
         $after = '';
@@ -362,7 +375,7 @@ if (is_admin()) {
 }
 
 register_activation_hook(__FILE__, function () {
-   
+    
 });
 
 register_deactivation_hook(__FILE__, function () {

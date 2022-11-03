@@ -12,7 +12,6 @@ class Admin {
                 include __DIR__ . '/index.php';
             });
         });
-        
 
         if ($this->is_admin_page()) {
             header('X-XSS-Protection: 0');
@@ -35,18 +34,6 @@ class Admin {
 }
 
 new Admin();
-
-//add_action('admin_init', function () {
-//    global $hefo_options;
-//
-//    if (isset($hefo_options['page_add_tags'])) {
-//        register_taxonomy_for_object_type('post_tag', 'page');
-//    }
-//
-//    if (isset($hefo_options['page_add_categories'])) {
-//        register_taxonomy_for_object_type('category', 'page');
-//    }
-//});
 
 
 

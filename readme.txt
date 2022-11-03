@@ -1,12 +1,12 @@
 === Head, Footer and Post Injections ===
 Tags: header, footer, ads, analytics, facebook pixel, amp
 Tested up to: 6.1
-Stable tag: 3.2.5
+Stable tag: 3.3.0
 Donate link: https://www.satollo.net/donations
 Contributors: satollo
 
 
-Header and Footer plugin let you to add html code to the head and footer sections of your blog page, inside posts... and more!
+Head and Footer plugin let you to add html code to the head and footer sections of your blog page, inside posts... and more!
 
 == Description ==
 
@@ -84,10 +84,25 @@ You can contribute to translate this plugin in your language on [WordPress Trans
 
 == Frequently Asked Questions ==
 
-FAQs are answered on [Header and Footer](http://www.satollo.net/plugins/header-footer) page.
+FAQs are answered on [Header and Footer](https://www.satollo.net/plugins/header-footer) page.
 
 
 == Changelog ==
+
+= PLANNED =
+
+* Add wp_body_open() support with a fallback
+* Add per post-type injection configuration
+* Add support for Smarty templating engine to be used in place of PHP
+* Choose a more meaning name for this plugin...
+
+= 3.3.0 =
+
+* Code completely reorganized for better maintenance
+* Deprecated (but still usable) mobile injections
+* Compatibility check with WP 6.1
+* Optimized performances and removed obsolete files
+* Removed (temporarily) the per-post injection options (apparently not working, anyway)
 
 = 3.2.5 =
 
